@@ -63,6 +63,7 @@ use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
+use crate::clipboard_sanitize::{sanitize_for_copy, sanitize_incoming};
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
@@ -780,14 +781,27 @@ impl ChatWidget {
                 self.on_ctrl_c();
                 return;
             }
-            KeyEvent {
-                code: KeyCode::Char('v'),
-                modifiers: KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
+            // Ctrl+V: attempt image paste else sanitized text paste (default path).
+            KeyEvent { code: KeyCode::Char('v'), modifiers, kind: KeyEventKind::Press, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
                 if let Ok((path, info)) = paste_image_to_temp_png() {
                     self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                } else if let Err(e) = self.paste_text_from_clipboard(true) {
+                    tracing::debug!("clipboard text paste (sanitized) not performed: {e}");
+                }
+                return;
+            }
+            // Ctrl+Alt+V: raw paste (bypass sanitizer).
+            KeyEvent { code: KeyCode::Char('v'), modifiers, kind: KeyEventKind::Press, .. }
+                if modifiers.contains(KeyModifiers::CONTROL)
+                    && modifiers.contains(KeyModifiers::ALT) =>
+            {
+                if let Ok((path, info)) = paste_image_to_temp_png() {
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                } else if let Err(e) = self.paste_text_from_clipboard(false) {
+                    tracing::debug!("clipboard text paste (raw) not performed: {e}");
                 }
                 return;
             }
@@ -955,7 +969,12 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
-        self.bottom_pane.handle_paste(text);
+        // Inbound paste sanitization hook: currently uses the same pipeline as copy
+        // (sanitize_incoming). If in the future inbound rules diverge (e.g., removing
+        // zero-width chars or normalizing Unicode), that logic will live behind
+        // sanitize_incoming without changing call sites.
+        let sanitized = sanitize_incoming(&text);
+        self.bottom_pane.handle_paste(sanitized);
     }
 
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
@@ -1464,6 +1483,30 @@ impl ChatWidget {
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
+    }
+
+    /// Paste text from system clipboard into the composer.
+    /// If `sanitize` is true, passes through incoming sanitizer.
+    fn paste_text_from_clipboard(&mut self, sanitize: bool) -> anyhow::Result<()> {
+        #[cfg(target_os = "android")]
+        {
+            anyhow::bail!("clipboard text paste unsupported on Android");
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let mut cb = arboard::Clipboard::new()?;
+            let text = cb.get_text()?;
+            if text.trim().is_empty() {
+                anyhow::bail!("clipboard empty or whitespace");
+            }
+            let incoming = if sanitize {
+                sanitize_incoming(&text)
+            } else {
+                text
+            };
+            self.insert_str(&incoming);
+        }
+        Ok(())
     }
 }
 
