@@ -100,3 +100,13 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+
+## Clipboard & Text Sanitization
+
+Inbound paste text passes through a small, extensible sanitization rules pipeline (the first built‑in rule strips the decorative `▌` glyph). Additional rules can be registered without changing call sites.
+
+Minimal shortcuts:
+• Ctrl+V sanitizes text (or attaches clipboard image)
+• Ctrl+Alt+V pastes raw text (no sanitization)
+
+For full rationale, extension points, large paste handling, and future roadmap see: [`docs/clipboard_sanitization.md`](./docs/clipboard_sanitization.md).
